@@ -9,7 +9,7 @@ Meeting Information
 • 出席者：羅文廷、李承哲、許瑜芯
 • 缺席者：無
 • 紀錄者：李承哲
-• 紀錄日期：2026-10-09
+• 紀錄日期：2026-10-012
 Agenda
 1. 討論 Final Project 主題的優先順序
 Discussion
