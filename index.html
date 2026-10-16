@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f3">
+  <meta name="description" content="小日子記帳：簡單記錄每一筆收支，在自己的瀏覽器裡安心管理日常財務。">
+  <title>小日子記帳 · 把生活記好</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳至主要內容</a>
+  <aside class="sidebar">
+    <a class="brand" href="./" aria-label="小日子記帳首頁"><span class="brand-icon">小</span><span>小日子<span class="brand-en">LITTLE LEDGER</span></span></a>
+    <div class="nav-caption">我的帳本</div>
+    <a class="nav-item active" href="#main"><span data-icon="grid"></span>收支總覽<span class="nav-dot"></span></a>
+    <a class="nav-item" href="#transactions"><span data-icon="list"></span>交易紀錄</a>
+    <a class="nav-item" href="#analysis"><span data-icon="chart"></span>支出分析</a>
+    <div class="sidebar-note"><span class="little-spark">✳</span><strong>每一筆小記錄，<br>都是理想生活的開始。</strong><p>慢慢累積，讓錢花在<br>真正喜歡的事情上。</p><div class="note-line"></div></div>
+    <div class="local-badge"><span data-icon="shield"></span><span>資料保存在此瀏覽器<br><small>不會上傳至伺服器</small></span></div>
+  </aside>
+
+  <main id="main" class="workspace">
+    <header class="topbar"><div class="breadcrumb">我的帳本 <span>/</span> <strong>收支總覽</strong></div><span class="today" id="today-label"></span></header>
+    <section class="heading-row"><div><div class="eyebrow">A LITTLE EVERY DAY</div><h1>把生活，記得剛剛好<span class="heading-dot">。</span></h1><p class="subtitle">從一杯咖啡到一份薪水，每一筆都值得好好記錄。</p></div><button class="button primary" id="add-button"><span data-icon="plus"></span>記一筆</button></section>
+    <div id="storage-warning" class="warning" role="alert" hidden></div>
+    <div class="period-row"><div class="month-picker"><button id="previous-month" class="icon-button" aria-label="上個月"><span data-icon="left"></span></button><label class="month-label"><span data-icon="calendar"></span><span class="sr-only">統計月份</span><input type="month" id="month" min="1900-01" max="9999-12" required></label><button id="next-month" class="icon-button" aria-label="下個月"><span data-icon="right"></span></button></div><span class="period-hint">給每個月一個清楚的樣子</span></div>
+
+    <section class="summary" aria-label="每月收支統計">
+      <article class="summary-card balance-card"><div class="stat-label">本月結餘<span class="stat-icon" data-icon="wallet"></span></div><div class="stat-number" id="balance">NT$ 0</div><div class="stat-footer"><span class="status-dot"></span><span id="balance-hint">收入減去支出，生活心裡有數</span></div><div class="card-orbit orbit-one"></div><div class="card-orbit orbit-two"></div></article>
+      <article class="summary-card"><div class="stat-label">本月收入<span class="stat-icon income-icon" data-icon="down"></span></div><div class="stat-number" id="income">NT$ 0</div><div class="stat-footer"><span class="tiny-tag income-tag">收入</span><span id="income-count">0 筆進帳</span></div></article>
+      <article class="summary-card"><div class="stat-label">本月支出<span class="stat-icon expense-icon" data-icon="up"></span></div><div class="stat-number" id="expense">NT$ 0</div><div class="stat-footer"><span class="tiny-tag expense-tag">支出</span><span id="expense-count">0 筆花費</span></div></article>
+    </section>
+
+    <div class="content-grid">
+      <section class="panel transactions" id="transactions" aria-labelledby="transactions-title">
+        <div class="panel-heading"><div><h2 id="transactions-title">收支明細 <span class="count-badge" id="record-count">0</span></h2><p>日常的每一筆，都在這裡。</p></div><button class="text-button" id="csv-button"><span data-icon="download"></span>匯出 CSV</button></div>
+        <div class="filters"><label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="搜尋備註、分類…" aria-label="搜尋紀錄"></label><select id="type-filter" aria-label="篩選收支類型"><option value="">全部收支</option value="expense">支出</option><option value="income">收入</option></select><select id="category-filter" aria-label="篩選分類"><option value="">全部分類</option></select></div>
+        <div class="table-scroll"><table><thead><tr><th>交易項目</th><th>日期</th><th class="amount-column">金額</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="record-list"></tbody></table></div>
+        <div class="empty-state" id="empty-state"><div class="empty-icon" data-icon="book"></div><h3 id="empty-title">讓第一筆，成為好習慣的開始</h3><p id="empty-description">早餐、車票，或今天的小確幸，從這裡記下來。</p><button class="button secondary" id="empty-add"><span data-icon="plus"></span>新增第一筆紀錄</button></div>
+        <div class="table-footer"><span id="list-summary">共 0 筆紀錄</span><span>金額以新臺幣 TWD 計算</span></div>
+      </section>
+
+      <section class="panel analysis" id="analysis" aria-labelledby="analysis-title"><div class="panel-heading"><div><h2 id="analysis-title">錢都去哪了？</h2><p>看看這個月的支出分布。</p></div><span class="mini-icon" data-icon="chart"></span></div><div class="donut" id="donut" role="img" aria-label="尚無支出"><div class="donut-center"><span>總支出</span><strong id="donut-total">$0</strong><small>TWD</small></div></div><div class="category-list" id="category-list"></div><div class="analysis-note" id="analysis-note">記下第一筆支出，讓生活的輪廓更清楚。</div></section>
+    </div>
+
+    <section class="backup-panel"><div class="backup-copy"><span class="backup-icon" data-icon="shield"></span><div><strong>你的帳本，由你保管</strong><p>資料只存於目前瀏覽器。定期下載備份，換裝置也能接著記。</p></div></div><div class="backup-actions"><input id="import-file" type="file" accept=".json,application/json" hidden><button id="import-button" class="button quiet"><span data-icon="upload"></span>匯入備份</button><button id="backup-button" class="button secondary"><span data-icon="download"></span>下載備份</button></div></section>
+    <footer class="footer"><span>小日子記帳 <span class="footer-dot">·</span> 把錢花得明白，把日子過得喜歡。</span><span>MADE FOR YOUR EVERYDAY</span></footer>
+  </main>
+
+  <dialog id="record-dialog" aria-labelledby="dialog-title"><form id="record-form"><div class="dialog-heading"><div><div class="eyebrow">A LITTLE NOTE</div><h2 id="dialog-title">記錄一筆日常</h2></div><button type="button" class="icon-button close-dialog" aria-label="關閉"><span data-icon="close"></span></button></div><div class="type-tabs" role="group" aria-label="收支類型"><button type="button" data-type="expense" aria-pressed="true">支出</button><button type="button" data-type="income" aria-pressed="false">收入</button></div><label class="field">金額 <span class="input-money"><span>NT$</span><input id="amount" name="amount" type="text" inputmode="decimal" placeholder="0" maxlength="12" required autocomplete="off"></span></label><div class="field-row"><label class="field">分類<select id="category" name="category" required></select></label><label class="field">日期<input id="date" name="date" type="date" min="1900-01-01" max="9999-12-31" required></label></div><label class="field">備註 <span class="optional">選填</span><input id="note" name="note" placeholder="這筆收支的小故事…" maxlength="120"></label><p class="form-error" id="form-error" role="alert" hidden></p><div class="dialog-footer"><button type="button" class="button quiet close-dialog">取消</button><button class="button primary" type="submit" id="save-record">儲存紀錄<span data-icon="right"></span></button></div></form></dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-heading"><h2 id="confirm-title">確認操作</h2><button type="button" class="icon-button" id="confirm-close" aria-label="關閉"><span data-icon="close"></span></button></div><p id="confirm-description" class="confirm-description"></p><div class="dialog-footer"><button id="confirm-cancel" class="button quiet">取消</button><button id="confirm-proceed" class="button primary">確認</button></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
