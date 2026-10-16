@@ -1,0 +1,17 @@
+# 此範本使用付費 Web Service 與持久磁碟。請在 Render 確認方案及費用後部署。
+services:
+  - type: web
+    name: little-ledger
+    runtime: docker
+    plan: starter
+    numInstances: 1
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LEDGER_DATA_DIR
+        value: /app/data
+    disk:
+      name: ledger-data
+      mountPath: /app/data
+      sizeGB: 1

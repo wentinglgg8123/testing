@@ -1,0 +1,9 @@
+.git
+.ledger-data
+.env
+.env.*
+node_modules
+tests
+*.sqlite*
+*.pdf
+__pycache__

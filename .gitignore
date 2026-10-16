@@ -1,1 +1,7 @@
 *.pdf
+.ledger-data/
+.env
+.env.*
+!.env.example
+node_modules/
+__pycache__/

@@ -1,4 +1,5 @@
 import { STORAGE_KEY, CATEGORIES, localDate, amountToCents, validateRecord, parseBackup, summarize, filterRecords, toCSV } from './ledger.js';
+import { accountRequest, validateSnapshot } from './account.js';
 
 const paths = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -49,11 +50,24 @@ $('#today-label').textContent = new Intl.DateTimeFormat('zh-TW', { year: 'numeri
 let records = [];
 let storageBlocked = false;
 let editingId = null;
+let formRecordId = null;
 let currentType = 'expense';
 let pendingConfirm = null;
 let toastTimer;
 const dialog = $('#record-dialog');
 const confirmDialog = $('#confirm-dialog');
+const authDialog = $('#auth-dialog');
+let localRecords = [];
+let localBlocked = false;
+let cloudUser = null;
+let cloudRevision = 0;
+let cloudAvailable = null;
+let cloudBusy = false;
+let cloudNeedsSync = false;
+let cloudAuthExpired = false;
+let checkingSession = true;
+let authMode = 'login';
+let syncMessage = '';
 try {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (raw !== null) records = parseBackup(raw);
@@ -62,6 +76,8 @@ try {
   $('#storage-warning').hidden = false;
   $('#storage-warning').textContent = '無法讀取既有資料。為保護原始內容，目前暫停寫入。請先檢查瀏覽器儲存權限或還原有效備份；請勿直接清除瀏覽器資料。';
 }
+localRecords = records;
+localBlocked = storageBlocked;
 
 function toast(message) {
   clearTimeout(toastTimer);
@@ -70,15 +86,38 @@ function toast(message) {
   toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 4500);
 }
 
-function persist(next, recovering = false) {
-  if (storageBlocked && !recovering) throw new Error('目前無法寫入。請檢查儲存權限，或使用有效備份還原帳本。');
+async function persist(next, recovering = false) {
+  if (checkingSession) throw new Error('正在確認登入狀態，請稍候。');
   if (next.length > 20000) throw new Error('帳本上限為 20,000 筆，請先匯出備份。');
+  if (cloudUser) {
+    if (cloudBusy) throw new Error('帳本正在同步，請稍候。');
+    if (cloudAuthExpired) throw new Error('登入已過期或帳號已切換，請重新登入。');
+    if (cloudNeedsSync) throw new Error('請先按「重新同步」確認最新帳本，再繼續儲存。');
+    cloudBusy = true; syncMessage = '正在同步…'; renderAccount();
+    try {
+      const data = validateSnapshot(await accountRequest('ledger', 'PUT', { revision: cloudRevision, records: next }, cloudUser.id));
+      applyCloud(data);
+    } catch (error) {
+      cloudNeedsSync = true;
+      cloudBusy = false;
+      if (error.code === 'REVISION_CONFLICT') {
+        await refreshCloud(false, true);
+        throw new Error('另一個裝置已更新帳本，已嘗試重新同步。請檢查最新紀錄後再次儲存，你的輸入仍保留在表單中。');
+      }
+      handleCloudError(error);
+      throw error;
+    } finally { cloudBusy = false; renderAccount(); }
+    return;
+  }
+  if (storageBlocked && !recovering) throw new Error('目前無法寫入。請檢查儲存權限，或使用有效備份還原帳本。');
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, records: next }));
   } catch {
     throw new Error('儲存失敗：瀏覽器空間不足或不允許儲存。請先下載備份並檢查設定。');
   }
   records = next;
+  localRecords = next;
+  localBlocked = false;
   storageBlocked = false;
   $('#storage-warning').hidden = true;
   render();
@@ -91,6 +130,7 @@ function populateCategories() {
 function openRecord(record = null) {
   $('#record-form').reset();
   editingId = record?.id ?? null;
+  formRecordId = record?.id ?? crypto.randomUUID();
   currentType = record?.type ?? 'expense';
   populateCategories();
   $('#dialog-title').textContent = record ? '編輯這筆日常' : '記錄一筆日常';
@@ -107,11 +147,13 @@ $('#empty-add').addEventListener('click', () => openRecord());
 document.querySelectorAll('.close-dialog').forEach(button => button.addEventListener('click', () => dialog.close()));
 document.querySelectorAll('[data-type]').forEach(button => button.addEventListener('click', () => { currentType = button.dataset.type; populateCategories(); }));
 
-$('#record-form').addEventListener('submit', event => {
+$('#record-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if ($('#save-record').disabled) return;
+  $('#save-record').disabled = true;
   try {
     const record = validateRecord({
-      id: editingId ?? crypto.randomUUID(),
+      id: formRecordId,
       type: currentType,
       category: $('#category').value,
       amount: amountToCents($('#amount').value),
@@ -119,18 +161,19 @@ $('#record-form').addEventListener('submit', event => {
       note: $('#note').value.trim(),
     });
     if (editingId && !records.some(r => r.id === editingId)) throw new Error('這筆紀錄已在其他分頁刪除，請關閉後重新操作。');
+    if (!editingId && records.some(r => r.id === formRecordId)) throw new Error('這筆紀錄已同步成功，請關閉表單並確認帳本，避免重複新增。');
     const next = editingId ? records.map(r => r.id === editingId ? record : r) : [...records, record];
     monthInput.value = record.date.slice(0, 7);
     $('#type-filter').value = '';
     $('#category-filter').value = '';
     $('#search').value = '';
-    persist(next);
+    await persist(next);
     dialog.close();
     toast(editingId ? '已更新這筆紀錄' : '已記下這筆日常');
   } catch (error) {
     $('#form-error').textContent = error.message;
     $('#form-error').hidden = false;
-  }
+  } finally { $('#save-record').disabled = false; }
 });
 
 function askConfirmation(title, description, buttonText, action) {
@@ -144,9 +187,11 @@ function askConfirmation(title, description, buttonText, action) {
 $('#confirm-cancel').addEventListener('click', () => confirmDialog.close());
 $('#confirm-close').addEventListener('click', () => confirmDialog.close());
 confirmDialog.addEventListener('close', () => { pendingConfirm = null; });
-$('#confirm-proceed').addEventListener('click', () => {
+$('#confirm-proceed').addEventListener('click', async () => {
   const action = pendingConfirm;
-  try { action?.(); confirmDialog.close(); } catch (error) { toast(error.message); }
+  $('#confirm-proceed').disabled = true;
+  try { await action?.(); confirmDialog.close(); } catch (error) { toast(error.message); }
+  finally { $('#confirm-proceed').disabled = false; }
 });
 
 function render() {
@@ -185,7 +230,7 @@ function render() {
     const remove = el('button', 'icon-button delete-button');
     remove.setAttribute('aria-label', `刪除 ${record.note || record.category}`);
     remove.append(icon('trash'));
-    remove.addEventListener('click', () => askConfirmation('刪除這筆紀錄？', `${record.date} · ${record.note || record.category} · NT$ ${money(record.amount)}\n刪除後無法復原。`, '確認刪除', () => { persist(records.filter(r => r.id !== record.id)); toast('已刪除紀錄'); }));
+    remove.addEventListener('click', () => askConfirmation('刪除這筆紀錄？', `${record.date} · ${record.note || record.category} · NT$ ${money(record.amount)}\n刪除後無法復原。`, '確認刪除', async () => { await persist(records.filter(r => r.id !== record.id)); toast('已刪除紀錄'); }));
     actions.append(edit, remove);
     actionsCell.append(actions);
     row.append(itemCell, date, amount, actionsCell);
@@ -265,8 +310,8 @@ $('#import-file').addEventListener('change', async event => {
   try {
     if (file.size > 5 * 1024 * 1024) throw new Error('備份檔案不得超過 5 MB。');
     const incoming = parseBackup(await file.text());
-    askConfirmation('還原備份帳本？', `備份內有 ${incoming.length} 筆紀錄，將取代目前所有資料。\n建議先下載目前的備份，再進行還原。`, '確認還原', () => {
-      persist(incoming, true);
+    askConfirmation('還原備份帳本？', `備份內有 ${incoming.length} 筆紀錄，將取代${cloudUser ? '目前帳號所有裝置的帳本' : '目前所有資料'}。\n建議先下載目前的備份，再進行還原。`, '確認還原', async () => {
+      await persist(incoming, true);
       if (incoming.length) monthInput.value = filterRecords(incoming)[0].date.slice(0, 7);
       $('#search').value = ''; $('#type-filter').value = ''; $('#category-filter').value = '';
       render();
@@ -278,13 +323,168 @@ window.addEventListener('storage', event => {
   if (event.key !== STORAGE_KEY && event.key !== null) return;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    records = raw === null ? [] : parseBackup(raw);
+    localRecords = raw === null ? [] : parseBackup(raw);
+    localBlocked = false;
+    if (cloudUser) { renderAccount(); return; }
+    records = localRecords;
     storageBlocked = false; $('#storage-warning').hidden = true;
     render(); toast('已同步其他分頁的更新');
   } catch {
+    localBlocked = true;
+    if (cloudUser) { renderAccount(); return; }
     storageBlocked = true;
     $('#storage-warning').hidden = false;
     $('#storage-warning').textContent = '其他分頁的資料更新無法讀取，已暫停寫入以保護資料。請檢查儲存權限或還原備份。';
   }
 });
-render();
+
+function renderAccount() {
+  $('#account-label').textContent = cloudUser ? `${cloudUser.username} 的帳本` : '本機帳本';
+  $('#sync-status').textContent = checkingSession ? '正在確認登入狀態…' : cloudUser ? syncMessage : '僅儲存在此瀏覽器';
+  $('#account-dot').classList.toggle('online', Boolean(cloudUser && !cloudNeedsSync));
+  $('#account-button').textContent = cloudUser ? cloudAuthExpired ? '重新登入' : cloudUser.username : '登入 / 註冊';
+  $('#account-button').disabled = checkingSession || cloudBusy || Boolean(cloudUser && !cloudAuthExpired);
+  $('#logout-button').hidden = !cloudUser;
+  $('#logout-button').disabled = checkingSession || cloudBusy;
+  $('#refresh-button').hidden = !cloudUser;
+  $('#refresh-button').disabled = cloudBusy;
+  const knownIds = new Set(records.map(record => record.id));
+  const count = localRecords.filter(record => !knownIds.has(record.id)).length;
+  $('#migrate-button').hidden = !cloudUser || localBlocked || count === 0;
+  $('#migrate-button').disabled = cloudBusy;
+  $('#migrate-button').textContent = `加入本機紀錄（${count}）`;
+  $('#add-button').disabled = checkingSession || cloudBusy;
+  $('#empty-add').disabled = checkingSession || cloudBusy;
+  $('#import-button').disabled = checkingSession || cloudBusy;
+  document.querySelectorAll('.close-dialog').forEach(button => { button.disabled = cloudBusy; });
+  for (const id of ['confirm-cancel', 'confirm-close', 'auth-close', 'auth-cancel']) $(`#${id}`).disabled = cloudBusy;
+  $('#storage-description').replaceChildren(document.createTextNode(cloudUser ? '帳本保存在帳號中' : '資料保存在此瀏覽器'), document.createElement('br'), el('small', '', cloudUser ? '登入同一帳號即可同步' : '登入帳號可跨裝置同步'));
+  $('#backup-description').textContent = cloudUser ? '帳本已連接帳號。其他裝置登入同一帳號即可同步，仍建議定期下載備份。' : '本機帳本只存於此瀏覽器。登入帳號可同步，仍建議定期下載備份。';
+}
+
+function applyCloud(data) {
+  cloudUser = data.user;
+  cloudRevision = data.revision;
+  records = data.records;
+  storageBlocked = false;
+  cloudNeedsSync = false;
+  cloudAuthExpired = false;
+  syncMessage = `已同步 ${new Intl.DateTimeFormat('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date())}`;
+  $('#storage-warning').hidden = true;
+  $('#cloud-warning').hidden = true;
+  render(); renderAccount();
+}
+
+function handleCloudError(error) {
+  cloudNeedsSync = true;
+  if (['AUTH_REQUIRED', 'ACCOUNT_CHANGED'].includes(error.code)) cloudAuthExpired = true;
+  syncMessage = cloudAuthExpired ? '需要重新登入' : '尚未確認同步，請重試';
+  $('#cloud-warning').textContent = error.message;
+  $('#cloud-warning').hidden = false;
+  renderAccount();
+}
+
+async function refreshCloud(notify = false, duringEdit = false) {
+  if (!cloudUser || cloudBusy || (!duringEdit && (dialog.open || confirmDialog.open || authDialog.open))) return false;
+  cloudBusy = true; syncMessage = '正在同步…'; renderAccount();
+  try {
+    const data = validateSnapshot(await accountRequest('ledger', 'GET', undefined, cloudUser.id));
+    applyCloud(data);
+    if (notify) toast('已取得最新帳本');
+    return true;
+  } catch (error) { handleCloudError(error); if (notify) toast(error.message); return false; }
+  finally { cloudBusy = false; renderAccount(); }
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  $('#auth-title').textContent = mode === 'register' ? '建立你的帳本帳號' : '登入你的帳本';
+  $('#auth-submit').textContent = mode === 'register' ? '建立帳號' : '登入帳號';
+  $('#password').autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+  $('#confirm-password-field').hidden = mode !== 'register';
+  $('#confirm-password').required = mode === 'register';
+  $('#confirm-password').disabled = mode !== 'register';
+  document.querySelectorAll('[data-auth]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.auth === mode)));
+  $('#auth-error').hidden = true;
+}
+$('#account-button').addEventListener('click', () => {
+  setAuthMode('login');
+  if (cloudAvailable === false) {
+    $('#auth-error').textContent = '此網址沒有啟用帳號服務。GitHub Pages 僅支援本機記帳；請開啟已部署 Node.js 後端的網站使用登入與同步。';
+    $('#auth-error').hidden = false;
+  }
+  authDialog.showModal(); $('#username').focus();
+});
+document.querySelectorAll('[data-auth]').forEach(button => button.addEventListener('click', () => setAuthMode(button.dataset.auth)));
+$('#auth-close').addEventListener('click', () => authDialog.close());
+$('#auth-cancel').addEventListener('click', () => authDialog.close());
+authDialog.addEventListener('close', () => { $('#auth-form').reset(); $('#auth-error').hidden = true; });
+for (const modal of [authDialog, dialog, confirmDialog]) modal.addEventListener('cancel', event => { if (cloudBusy) event.preventDefault(); });
+$('#auth-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (cloudBusy) return;
+  if (authMode === 'register' && $('#password').value !== $('#confirm-password').value) {
+    $('#auth-error').textContent = '兩次輸入的密碼不一致。'; $('#auth-error').hidden = false; return;
+  }
+  cloudBusy = true; renderAccount();
+  $('#auth-submit').disabled = true;
+  document.querySelectorAll('[data-auth]').forEach(button => { button.disabled = true; });
+  try {
+    const data = validateSnapshot(await accountRequest(authMode, 'POST', { username: $('#username').value.trim(), password: $('#password').value }));
+    cloudAvailable = true;
+    applyCloud(data);
+    if (data.records.length && !filterRecords(records, { month: monthInput.value }).length) monthInput.value = filterRecords(records)[0].date.slice(0, 7);
+    $('#search').value = ''; $('#type-filter').value = ''; $('#category-filter').value = '';
+    render(); authDialog.close();
+    toast(localRecords.length ? '已登入；可按「加入本機紀錄」移轉原有帳本' : '已登入，可以在其他裝置使用同一帳號');
+  } catch (error) {
+    $('#auth-error').textContent = error.message; $('#auth-error').hidden = false;
+  } finally {
+    cloudBusy = false; renderAccount(); $('#auth-submit').disabled = false;
+    document.querySelectorAll('[data-auth]').forEach(button => { button.disabled = false; });
+  }
+});
+$('#logout-button').addEventListener('click', async () => {
+  if (cloudBusy) return;
+  cloudBusy = true; renderAccount();
+  try {
+    await accountRequest('logout', 'POST', {});
+    cloudUser = null; cloudRevision = 0; cloudNeedsSync = false; cloudAuthExpired = false;
+    $('#cloud-warning').hidden = true;
+    try { const raw = localStorage.getItem(STORAGE_KEY); localRecords = raw === null ? [] : parseBackup(raw); localBlocked = false; }
+    catch { localRecords = []; localBlocked = true; }
+    records = localRecords; storageBlocked = localBlocked;
+    $('#storage-warning').hidden = !localBlocked;
+    if (localBlocked) $('#storage-warning').textContent = '無法讀取本機帳本，已暫停寫入。請檢查瀏覽器儲存權限或還原有效備份。';
+    render(); toast('已登出，目前顯示此瀏覽器的本機帳本');
+  } catch (error) { toast('無法確認登出，請檢查網路後再試。'); }
+  finally { cloudBusy = false; renderAccount(); }
+});
+$('#refresh-button').addEventListener('click', () => refreshCloud(true));
+$('#migrate-button').addEventListener('click', () => {
+  askConfirmation('將本機紀錄加入帳號？', '本機帳本會加入目前帳號，之後能在其他裝置查看。\n相同識別碼保留帳號中的紀錄，不會覆蓋或重複加入。本機原始資料仍會保留。', '確認加入', async () => {
+    const ids = new Set(records.map(record => record.id));
+    const additions = localRecords.filter(record => !ids.has(record.id));
+    await persist([...records, ...additions]);
+    renderAccount(); toast(`已將 ${additions.length} 筆本機紀錄加入帳號`);
+  });
+});
+
+async function checkSession() {
+  try {
+    const data = await accountRequest('session');
+    cloudAvailable = true;
+    if (data.user) applyCloud(validateSnapshot(data));
+  } catch (error) {
+    cloudAvailable = error.code === 'BACKEND_UNAVAILABLE' ? false : null;
+    if (cloudAvailable !== false) {
+      $('#cloud-warning').textContent = '暫時無法確認登入狀態，目前顯示本機帳本。請檢查網路，再使用「登入 / 註冊」重新連線。';
+      $('#cloud-warning').hidden = false;
+    }
+  } finally { checkingSession = false; renderAccount(); }
+}
+window.addEventListener('focus', () => { if (!cloudAuthExpired) refreshCloud(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !cloudAuthExpired) refreshCloud(); });
+setInterval(() => { if (document.visibilityState === 'visible' && !cloudAuthExpired) refreshCloud(); }, 30000);
+render(); renderAccount();
+checkSession();
